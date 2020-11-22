@@ -19,6 +19,8 @@ Imports:
     SummarizedExperiment,
     BiocNeighbors,
     scuttle,
+    metapod,
+    scran,
     uwot
 Suggests: 
     testthat,
