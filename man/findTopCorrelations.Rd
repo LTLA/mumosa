@@ -14,6 +14,8 @@ findTopCorrelations(x, number, ...)
   y = NULL,
   d = 50,
   direction = c("both", "positive", "negative"),
+  block = NULL,
+  equiweight = TRUE,
   use.names = TRUE,
   deferred = TRUE,
   BSPARAM = IrlbaParam(),

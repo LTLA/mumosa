@@ -123,3 +123,45 @@ test_that("findTopCorrelations works for the top cross-correlations", {
     expect_identical(dfn, df["negative"])
 })
 
+set.seed(109109102)
+test_that("findTopCorrelations works with blocked self-correlations", {
+    library(scuttle)
+    sce <- mockSCE(ngenes=100)
+    sce <- logNormCounts(sce)
+
+    library(mumosa)
+    ref <- findTopCorrelations(sce, number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    out <- findTopCorrelations(sce, number=20, d=10, block=rep(1, ncol(sce)), BSPARAM=BiocSingular::ExactParam()) 
+    expect_identical(ref,out)
+
+    # Equiweighting preserves the results when blocks are unbalanced.
+    block <- rep(1:2, each=ncol(sce)/2)
+    ref <- findTopCorrelations(sce, number=20, d=10, block=block, BSPARAM=BiocSingular::ExactParam())
+
+    expanded <- c(seq_len(ncol(sce)), seq_len(ncol(sce)/2))
+    out <- findTopCorrelations(sce[,expanded], number=20, d=10, block=block[expanded], BSPARAM=BiocSingular::ExactParam()) 
+
+    ref$positive <- ref$positive[,1:3]
+    ref$positive <- ref$positive[do.call(order, ref$positive),]
+    out$positive <- out$positive[,1:3]
+    out$positive <- out$positive[do.call(order, out$positive),]
+    ref$negative <- ref$negative[,1:3]
+    ref$negative <- ref$negative[do.call(order, ref$negative),]
+    out$negative <- out$negative[,1:3]
+    out$negative <- out$negative[do.call(order, out$negative),]
+    expect_equal(ref, out)
+
+    # Same results without equiweighting, for balanced blocks.
+    weight <- findTopCorrelations(sce, number=20, d=NA, block=block, BSPARAM=BiocSingular::ExactParam())
+    noweight <- findTopCorrelations(sce, number=20, d=NA, block=block, equiweight=FALSE, BSPARAM=BiocSingular::ExactParam())
+    expect_equal(weight, noweight)
+
+    # Not true of unweighted and unbalanced blocks.    
+    block0 <- rep(1:2, c(20, ncol(sce)-20))
+    weight <- findTopCorrelations(sce, number=20, d=NA, block=block0, BSPARAM=BiocSingular::ExactParam())
+    noweight <- findTopCorrelations(sce, number=20, d=NA, block=block0, equiweight=FALSE, BSPARAM=BiocSingular::ExactParam())
+    expect_false(isTRUE(all.equal(weight, noweight)))
+})
+
+
+
