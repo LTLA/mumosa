@@ -62,8 +62,8 @@
 #' sce2 <- mockSCE(ngenes=20) # pretend this is CITE-seq data, or something.
 #' sce2 <- logNormCounts(sce2)
 #'
-#' # top 20 correlated features in 'sce2' for each feature in 'sce1':
-#' df <- findtopcorrelations(sce, sce2, number=20) 
+#' # Top 20 correlated features in 'sce2' for each feature in 'sce1':
+#' df <- findTopCorrelations(sce1, sce2, number=20) 
 #' df
 #' 
 #' @seealso
@@ -72,10 +72,15 @@
 #' @name findTopCorrelations
 NULL
 
+#' @importFrom S4Vectors DataFrame splitAsList
+#' @importFrom IRanges heads
+#' @importFrom stats p.adjust
 #' @importFrom BiocSingular IrlbaParam
-#' @importFrom BiocNeighbors findKNN queryKNN KmknnParam
+#' @importFrom BiocNeighbors findKNN queryKNN KmknnParam buildIndex
 #' @importFrom BiocParallel SerialParam bpstart bpstop
 #' @importFrom scuttle .bpNotSharedOrUp
+#' @importFrom DelayedArray DelayedArray
+#' @importFrom DelayedMatrixStats rowAnys
 .find_top_correlations <- function(x, number=10, y=NULL, d=50, 
     direction=c("both", "positive", "negative"), 
     block=NULL, equiweight=TRUE, use.names=TRUE, deferred=TRUE, 
@@ -87,140 +92,135 @@ NULL
         on.exit(bpstop(BPPARAM))
     }
 
-    if (is.null(y)) {
-        .find_self_top_correlations(x, number=number, d=d, deferred=deferred, equiweight=equiweight,
-            block=block, direction=direction, use.names=use.names,
-            BSPARAM=BSPARAM, BNPARAM=BNPARAM, BPPARAM=BPPARAM)
-    } else {
-        .find_cross_top_correlations(x, y=y, number=number, d=d, deferred=deferred, equiweight=equiweight,
-            block=block, direction=direction, use.names=use.names,
-            BSPARAM=BSPARAM, BNPARAM=BNPARAM, BPPARAM=BPPARAM)
-    }
-}
+    self.search <- is.null(y)
 
-#############################
-##### Top correlations ######
-#############################
-
-#' @importFrom Matrix t
-#' @importFrom BiocNeighbors findKNN queryKNN buildIndex
-#' @importFrom beachmat rowBlockApply
-#' @importFrom DelayedMatrixStats rowAnys
-#' @importFrom S4Vectors List
-.find_self_top_correlations <- function(x, direction, number, d, block, deferred, equiweight, use.names, BSPARAM, BNPARAM, BPPARAM) {
-    if (direction=="positive") {
-        combined <- t(x)
+    # Wrapping in DA's to avoid actually subsetting the matrices unnecessarily.
+    x <- DelayedArray(x)
+    if (self.search) {
+        y <- x
     } else {
-        combined <- t(x)
-        combined <- cbind(combined, -combined)
+        y <- DelayedArray(y)
     }
 
-    stash <- .create_blocked_rank_matrix(combined, deferred=deferred, 
-        block=block, d=d, equiweight=equiweight, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
-    rank.out <- stash$rank.out
-    search.out <- stash$search.out
-    nblocks <- stash$nblocks
-
-    if (direction=="positive") {
-        target <- search.out
-        rank.x <- other.x <- rank.out
+    xcat <- .find_block_availability(x, block=block, BPPARAM=BPPARAM)
+    if (self.search) {
+        ycat <- xcat
     } else {
-        in.first <- seq_len(nrow(x))
-        in.second <- nrow(x) + seq_len(nrow(x))
-        target <- search.out[in.first,,drop=FALSE]
-        other.x <- rank.out[in.second,,drop=FALSE]
-        rank.x <- rank.out[in.first,,drop=FALSE]
+        ycat <- .find_block_availability(y, block=block, BPPARAM=BPPARAM)
     }
-    precomputed <- buildIndex(target, BNPARAM=BNPARAM)
 
+    total.ntests <- 0L
     output <- List()
-
-    args <- list(
-        ntests=nrow(x) * (nrow(x) - 1L), # don't divide by 2, as some pairs are tested twice if they show up reciprocally.
-        names1=rownames(x),
-        names2=rownames(x),
-        use.names=use.names,
-        nblocks=nblocks,
-        equiweight=equiweight
-    )
-
+    empty <- DataFrame(feature1=integer(0), feature2=integer(0), rho=numeric(0), p.value=numeric(0))
     if (direction %in% c("positive", "both")) {
-        nn.out <- findKNN(BNINDEX=precomputed, k=number, BPPARAM=BPPARAM, get.distance=FALSE)
-        rho <- rowBlockApply(rank.x, FUN=.compute_exact_neighbor_rho, other=rank.x, nblocks=nblocks, indices=nn.out$index, BPPARAM=BPPARAM)
-        output$positive <- do.call(.create_output_dataframe, c(list(nn.out$index, rho, positive=TRUE), args))
+        output$positive <- list(empty)
     }
-
     if (direction %in% c("negative", "both")) {
-        # Plus 1 and then stripping out self, if it should come to that.
-        nn.out <- queryKNN(query=search.out[in.second,,drop=FALSE],
-            BNINDEX=precomputed, k=number+1L, get.distance=FALSE, BPPARAM=BPPARAM)
+        output$negative <- list(empty)
+    }
+    ocounter <- 1L
 
-        discard <- nn.out$index==seq_len(nrow(nn.out$index))
-        discard[!rowAnys(discard),ncol(discard)] <- TRUE # removing the last.
-        stripped <- matrix(t(nn.out$index)[t(!discard)], ncol(nn.out$index) - 1L, nrow(nn.out$index)) # transposing so we refill by column-major.
-        nn.out$index <- t(stripped)
+    for (x.chosen in xcat$by) {
+        x.valid <- unlist(xcat$available[x.chosen[1],,drop=FALSE])
+        for (y.chosen in ycat$by) {
+            y.valid <- unlist(ycat$available[y.chosen[1],,drop=FALSE])
+            both.valid <- x.valid & y.valid
+            if (!any(both.valid)) {
+                next
+            }
 
-        rho <- rowBlockApply(rank.x, FUN=.compute_exact_neighbor_rho, other=rank.x, nblocks=nblocks, indices=nn.out$index, BPPARAM=BPPARAM)
-        output$negative <- do.call(.create_output_dataframe, c(list(nn.out$index, rho, positive=FALSE), args))
+            same <- self.search && identical(x.chosen, y.chosen)
+            if (same) {
+                ntests <- length(x.chosen) * (length(x.chosen) - 1L) # don't divide by 2, as the same pair may be reported twice.
+            } else {
+                ntests <- length(x.chosen) * length(y.chosen)
+            }
+            total.ntests <- total.ntests + ntests
+
+            block.info <- xcat$block[both.valid]
+            cells <- unlist(block.info)
+            x0 <- x[x.chosen,cells,drop=FALSE]
+            if (!same) {
+                y0 <- y[y.chosen,cells,drop=FALSE]
+            }
+
+            if (direction=="positive") {
+                in.first <- seq_len(nrow(x0))
+                if (same) {
+                    in.second <- in.first
+                    combined <- t(x0)
+                } else {
+                    in.second <- nrow(x0) + seq_len(nrow(y0))
+                    combined <- cbind(t(x0), t(y0))
+                }
+            } else {
+                in.first <- seq_len(nrow(x0))
+                in.first.neg <- nrow(x0) + in.first
+                combined <- t(x0)
+
+                if (same) {
+                    in.second <- in.first
+                    combined <- cbind(combined, -combined)
+                } else {
+                    in.second <- 2L*nrow(x0) + seq_len(nrow(y0))
+
+                    # We make positive and negative versions of all of them for symmetry's sake.
+                    # Technically we only need a negative version of the smaller one... oh well.
+                    alt <- t(y0)
+                    combined <- cbind(combined, -combined, alt, -alt)
+                }
+            }
+
+            nblocks <- lengths(block.info)
+            stash <- .create_blocked_rank_matrix(combined, deferred=deferred, nblocks=nblocks,
+                d=d, equiweight=equiweight, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
+            rank.out <- stash$rank.out
+            search.out <- stash$search.out
+
+            precomputed <- buildIndex(search.out[in.second,,drop=FALSE], BNPARAM=BNPARAM)
+
+            if (!is.null(output$positive)) {
+                if (same) {
+                    nn.out <- findKNN(BNINDEX=precomputed, k=number, BPPARAM=BPPARAM, get.distance=FALSE)
+                } else {
+                    nn.out <- queryKNN(query=search.out[in.first,,drop=FALSE], k=number, 
+                        get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
+                }
+
+                rho <- rowBlockApply(rank.out[in.first,,drop=FALSE], FUN=.compute_exact_neighbor_rho, 
+                    nblocks=nblocks, other=rank.out[in.second,,drop=FALSE], indices=nn.out$index, BPPARAM=BPPARAM)
+                output$positive[[ocounter]] <- .create_output_dataframe(nn.out$index, rho, positive=TRUE, 
+                    nblocks=nblocks, equiweight=equiweight, chosen1=x.chosen, chosen2=y.chosen)
+            }
+
+            if (!is.null(output$negative)) {
+                nn.out <- queryKNN(query=search.out[in.first.neg,,drop=FALSE], k=number, 
+                    get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
+
+                if (same) {
+                    discard <- nn.out$index==seq_len(nrow(nn.out$index))
+                    discard[!rowAnys(discard),ncol(discard)] <- TRUE # removing the last.
+                    stripped <- matrix(t(nn.out$index)[t(!discard)], ncol(nn.out$index) - 1L, nrow(nn.out$index)) # transposing so we refill by column-major.
+                    nn.out$index <- t(stripped)
+                }
+
+                rho <- rowBlockApply(rank.out[in.first,,drop=FALSE], FUN=.compute_exact_neighbor_rho, 
+                    nblocks=nblocks, other=rank.out[in.second,,drop=FALSE], indices=nn.out$index, BPPARAM=BPPARAM)
+                output$negative[[ocounter]] <- .create_output_dataframe(nn.out$index, rho, positive=FALSE, 
+                    nblocks=nblocks, equiweight=equiweight, chosen1=x.chosen, chosen2=y.chosen)
+            }
+        }
     }
 
-    output
-}
-
-#' @importFrom Matrix t
-#' @importFrom BiocNeighbors queryKNN buildIndex
-#' @importFrom beachmat rowBlockApply
-#' @importFrom S4Vectors List
-.find_cross_top_correlations <- function(x, y, direction, number, d, block, deferred, equiweight, use.names, BSPARAM, BNPARAM, BPPARAM) {
-    if (direction=="positive") {
-        in.first <- seq_len(nrow(x))
-        in.second <- nrow(x) + seq_len(nrow(y))
-        combined <- cbind(t(x), t(y))
-    } else {
-        in.first <- seq_len(nrow(x))
-        in.first.neg <- nrow(x) + in.first
-        in.second <- 2L*nrow(x) + seq_len(nrow(y))
-
-        # We make positive and negative versions of all of them for symmetry's sake.
-        # Technically we only need a negative version of the smaller one... oh well.
-        combined <- t(x)
-        alt <- t(y)
-        combined <- cbind(combined, -combined, alt, -alt)
-    }
-
-    stash <- .create_blocked_rank_matrix(combined, deferred=deferred, 
-        block=block, d=d, equiweight=equiweight, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
-    rank.out <- stash$rank.out
-    search.out <- stash$search.out
-    nblocks <- stash$nblocks
-
-    precomputed <- buildIndex(search.out[in.second,,drop=FALSE], BNPARAM=BNPARAM)
-
-    output <- List()
-
-    args <- list(
-        ntests=nrow(x) * nrow(y), 
-        names1=rownames(x),
-        names2=rownames(y),
-        use.names=use.names,
-        nblocks=nblocks,
-        equiweight=equiweight
-    )
-
-    if (direction %in% c("positive", "both")) {
-        nn.out <- queryKNN(query=search.out[in.first,,drop=FALSE], k=number, 
-            get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
-        rho <- rowBlockApply(rank.out[in.first,,drop=FALSE], FUN=.compute_exact_neighbor_rho, 
-            nblocks=nblocks, other=rank.out[in.second,,drop=FALSE], indices=nn.out$index, BPPARAM=BPPARAM)
-        output$positive <- do.call(.create_output_dataframe, c(list(nn.out$index, rho, positive=TRUE), args))
-    }
-
-    if (direction %in% c("negative", "both")) {
-        nn.out <- queryKNN(query=search.out[in.first.neg,,drop=FALSE], k=number, 
-            get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
-        rho <- rowBlockApply(rank.out[in.first,,drop=FALSE], FUN=.compute_exact_neighbor_rho, 
-            nblocks=nblocks, other=rank.out[in.second,,drop=FALSE], indices=nn.out$index, BPPARAM=BPPARAM)
-        output$negative <- do.call(.create_output_dataframe, c(list(nn.out$index, rho, positive=FALSE), args))
+    for (dir in names(output)) {
+        combined <- do.call(rbind, output[[dir]])
+        combined <- combined[order(combined$feature1, combined$p.value),,drop=FALSE]
+        fragged <- splitAsList(combined, combined$feature1)
+        fragged <- heads(fragged, number)
+        final <- unlist(fragged)
+        final <- .fill_names(final, use.names, rownames(x), rownames(y))
+        final$FDR <- p.adjust(final$p.value, method="BH", n=total.ntests)
+        output[[dir]] <- final
     }
 
     output
@@ -230,42 +230,87 @@ NULL
 ##### Internals ######
 ######################
 
-#' @importFrom BiocGenerics cbind
-#' @importFrom DelayedMatrixStats colVars
-.create_blocked_rank_matrix <- function(x, deferred, block, ..., d, equiweight, BSPARAM, BPPARAM) {
+#' @importFrom S4Vectors DataFrame splitAsList
+#' @importFrom BiocParallel SerialParam
+#' @importFrom DelayedArray DelayedArray setAutoBPPARAM getAutoBPPARAM
+#' @importFrom DelayedMatrixStats rowVars
+.find_block_availability <- function(x, block, tol=1e-8, BPPARAM=SerialParam()) {
+    old <- getAutoBPPARAM()
+    setAutoBPPARAM(BPPARAM)
+    on.exit(setAutoBPPARAM(old))
+
+    x <- DelayedArray(x)
     if (is.null(block)) {
-        nblocks <- nrow(x)
-        rank.out <- .create_rank_matrix(x, deferred=deferred, BPPARAM=BPPARAM)
-        search.out <- .compress_rank_matrix(rank.out, d=d, deferred=deferred, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
-
+        output <- list(all=rowVars(x) > tol) 
+        by.block <- list(seq_len(ncol(x)))
     } else {
-        # Remember, features are columns coming into this function!
-        # So we have to split by rows, as cells are in different batches.
-        by.block <- split(seq_len(nrow(x)), block)
-        rank.out <- search.out <- vector("list", length(by.block))
-
+        by.block <- splitAsList(seq_len(ncol(x)), block)
+        output <- vector("list", length(by.block))
+        names(output) <- names(by.block)
         for (i in seq_along(by.block)) {
-            chosen <- by.block[[i]]
-            rank.out[[i]] <- .create_rank_matrix(x[chosen,,drop=FALSE], deferred=deferred, BPPARAM=BPPARAM)
-            search.out[[i]] <- .compress_rank_matrix(rank.out[[i]], d=d, deferred=deferred, BSPARAM=BSPARAM, BPPARAM=BPPARAM)
-
-            # Equalizing the distance contribution based on the total variance.
-            # This is not necessary for d=NA because the rank scaling does this for us,
-            # but I do it again anyway because the PCA may change the relative contributions.
-            if (equiweight) {
-                total.var <- sum(colVars(search.out[[i]]))
-                search.out[[i]] <- search.out[[i]] / sqrt(total.var)
-            }
+            output[[i]] <- rowVars(x, cols=by.block[[i]]) > tol
         }
-
-        rank.out <- do.call(cbind, rank.out)
-        nblocks <- lengths(by.block)
-        search.out <- do.call(cbind, search.out)
     }
 
-    list(rank.out=rank.out, search.out=search.out, nblocks=nblocks)
+    availabilities <- do.call(DataFrame, c(output, list(check.names=FALSE)))
+    ids <- selfmatch(availabilities)
+    by.availability <- split(seq_along(ids), ids)
+    list(by=by.availability, block=by.block, available=availabilities)
 }
 
+#' @importFrom BiocGenerics cbind
+#' @importFrom DelayedMatrixStats colVars
+#' @importFrom Matrix colMeans t
+#' @importFrom BiocSingular DeferredMatrix
+#' @importFrom DelayedArray getAutoBPPARAM setAutoBPPARAM
+#' @importFrom scran scaledColRanks
+#' @importFrom BiocSingular runPCA
+.create_blocked_rank_matrix <- function(x, deferred, nblocks, ..., d, equiweight, BSPARAM, BPPARAM) {
+    old <- getAutoBPPARAM()
+    setAutoBPPARAM(BPPARAM)
+    on.exit(setAutoBPPARAM(old))
+
+    # Remember, features are columns coming into this function!
+    # So we have to split by rows, as cells are in different batches.
+    rank.out <- search.out <- vector("list", length(nblocks))
+    last <- 0L
+
+    for (i in seq_along(nblocks)) {
+        chosen <- last + seq_len(nblocks[i])
+        x0 <- x[chosen,,drop=FALSE]
+
+        if (!deferred) {
+            rank.out[[i]] <- scaledColRanks(x0, BPPARAM=BPPARAM, transposed=TRUE)
+        } else {
+            y <- scaledColRanks(x0, transposed=FALSE, as.sparse=TRUE, BPPARAM=BPPARAM)
+            y <- DeferredMatrix(y, center=colMeans(y))
+            rank.out[[i]] <- t(y)
+        }
+
+        if (!is.na(d)) {
+            BSPARAM@deferred <- deferred # TODO: add easier setters.
+            search.out[[i]] <- runPCA(rank.out[[i]], rank=d, get.rotation=FALSE, BSPARAM=BSPARAM, BPPARAM=BPPARAM)$x
+        } else {
+            search.out[[i]] <- as.matrix(rank.out[[i]])
+        }
+
+        # Equalizing the distance contribution based on the total variance.
+        # This is not necessary for d=NA because the rank scaling does this for us,
+        # but the PCA may change the relative contributions, so we have to do something.
+        if (!is.na(d) && equiweight) {
+            total.var <- sum(colVars(search.out[[i]]))
+            search.out[[i]] <- search.out[[i]] / sqrt(total.var)
+        }
+
+        last <- last + nblocks[i]
+    }
+
+    rank.out <- do.call(cbind, rank.out)
+    search.out <- do.call(cbind, search.out)
+    list(rank.out=rank.out, search.out=search.out)
+}
+
+#' @importFrom Matrix rowSums
 #' @importFrom DelayedArray currentViewport makeNindexFromArrayViewport
 .compute_exact_neighbor_rho <- function(block, other, indices, nblocks) {
     vp <- currentViewport()
@@ -294,43 +339,14 @@ NULL
     output
 }
 
-#' @importFrom Matrix colMeans t
-#' @importFrom BiocSingular DeferredMatrix
-#' @importFrom DelayedArray getAutoBPPARAM setAutoBPPARAM
-#' @importFrom scran scaledColRanks
-.create_rank_matrix <- function(x, deferred, ..., BPPARAM) {
-    if (!deferred) {
-        scaledColRanks(x, ..., transposed=TRUE)
-    } else {
-        old <- getAutoBPPARAM()
-        setAutoBPPARAM(BPPARAM)
-        on.exit(setAutoBPPARAM(old))
-
-        y <- scaledColRanks(x, ..., transposed=FALSE, as.sparse=TRUE, BPPARAM=BPPARAM)
-        y <- DeferredMatrix(y, center=colMeans(y))
-        t(y)
-    }
-}
-
-#' @importFrom BiocSingular runPCA
-.compress_rank_matrix <- function(rank.x, d, deferred, BSPARAM, BPPARAM) {
-    if (!is.na(d)) {
-        BSPARAM@deferred <- deferred # TODO: add easier setters.
-        runPCA(rank.x, rank=d, get.rotation=FALSE, BSPARAM=BSPARAM, BPPARAM=BPPARAM)$x
-    } else {
-        as.matrix(rank.x)
-    }
-}
-
-#' @importFrom stats p.adjust
+#' @importFrom S4Vectors DataFrame
 #' @importFrom metapod parallelStouffer
-.create_output_dataframe <- function(indices, rho, nblocks, equiweight, use.names, names1, names2, ntests, positive) {
+.create_output_dataframe <- function(indices, rho, nblocks, equiweight, positive, chosen1, chosen2) {
     rho <- do.call(mapply, c(list(FUN=rbind, SIMPLIFY=FALSE), rho)) # still fragmented from the blockApply.
     mean.rho <- .compute_mean_rho(rho, nblocks, equiweight)
 
-    self <- rep(seq_len(nrow(indices)), ncol(indices))
-    df <- DataFrame(feature1=self, feature2=as.vector(indices), rho=as.vector(mean.rho))
-    df <- .fill_names(df, use.names, names1, names2)
+    self <- rep(chosen1, ncol(indices))
+    df <- DataFrame(feature1=self, feature2=chosen2[as.vector(indices)], rho=as.vector(mean.rho))
 
     p.values <- mapply(FUN=.compute_cor_p, rho=rho, ncells=nblocks, 
         MoreArgs=list(positive=positive), SIMPLIFY=FALSE)
@@ -348,10 +364,7 @@ NULL
     }
 
     df$p.value <- as.vector(p.value)
-    df$FDR <- p.adjust(df$p.value, method="BH", n = ntests)
-
-    o <- order(df$feature1, df$p.value)
-    df[o,,drop=FALSE]
+    df
 }
 
 #######################

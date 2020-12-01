@@ -15,6 +15,7 @@ Imports:
     methods,
     Matrix,
     BiocGenerics,
+    IRanges,
     S4Vectors,
     DelayedArray,
     SummarizedExperiment,

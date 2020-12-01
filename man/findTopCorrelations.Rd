@@ -98,8 +98,8 @@ sce1 <- logNormCounts(sce1)
 sce2 <- mockSCE(ngenes=20) # pretend this is CITE-seq data, or something.
 sce2 <- logNormCounts(sce2)
 
-# top 20 correlated features in 'sce2' for each feature in 'sce1':
-df <- findtopcorrelations(sce, sce2, number=20) 
+# Top 20 correlated features in 'sce2' for each feature in 'sce1':
+df <- findTopCorrelations(sce1, sce2, number=20) 
 df
 
 }
