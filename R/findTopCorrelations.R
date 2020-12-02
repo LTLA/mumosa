@@ -222,7 +222,7 @@ NULL
         fragged <- heads(fragged, number)
         final <- unlist(fragged, use.names=FALSE)
         final <- .fill_names(final, use.names, rownames(x), rownames(y))
-        final$FDR <- p.adjust(final$p.value, method="BH", n=total.ntests)
+        final$FDR <- p.adjust(final$p.value, method="BH", n=max(1, total.ntests)) # hack for bug.
         output[[dir]] <- final
     }
 
