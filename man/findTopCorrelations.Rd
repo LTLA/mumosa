@@ -65,6 +65,7 @@ Each DataFrame has up to \code{nrow(x) * number} rows, containing the top \code{
 This contains the following fields:
 \itemize{
 \item \code{feature1}, the name (character) or row index (integer) of each feature in \code{x}.
+Not all features may be reported here, see Details.
 \item \code{feature2}, the name (character) or row index (integer) of one of the top correlated features to \code{feature1}.
 This is another feature in \code{x} if \code{y=NULL}, otherwise it is a feature in \code{y}.
 \item \code{rho}, the Spearman rank correlation for the current pair of \code{feature1} and \code{feature2}.
@@ -89,6 +90,11 @@ If \code{block} is specified, correlations are computed separately for each bloc
 For each feature pair, the reported \code{rho} is set to the average of the correlations across all blocks.
 Similarly, the p-value corresponding to each correlation is computed separately for each block and then combined across blocks with Stouffer's method.
 If \code{equiweight=FALSE}, the average correlation and each per-block p-value is weighted by the number of cells.
+
+We only consider pairs of features that have computable correlations in at least one block.
+Blocks are ignored if one or the other feature has tied values (typically zeros) for all cells in that block.
+This means that a feature may not have any entries in \code{feature1} if it forms no valid pairs, e.g., because it is not expressed.
+Similarly, the total number of rows may be less than the maximum if insufficient valid pairs are available.
 }
 \examples{
 library(scuttle)
