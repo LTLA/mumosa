@@ -194,9 +194,10 @@ NULL
             }
 
             if (!is.null(output$negative)) {
-                nn.out <- queryKNN(query=search.out[in.first.neg,,drop=FALSE], k=number, 
+                nn.out <- queryKNN(query=search.out[in.first.neg,,drop=FALSE], k=number + as.integer(same), 
                     get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
 
+                # Searching for number + 1 and then stripping out any self-matches.
                 if (same) {
                     discard <- nn.out$index==seq_len(nrow(nn.out$index))
                     discard[!rowAnys(discard),ncol(discard)] <- TRUE # removing the last.
@@ -209,6 +210,8 @@ NULL
                 output$negative[[ocounter]] <- .create_output_dataframe(nn.out$index, rho, positive=FALSE, 
                     nblocks=nblocks, equiweight=equiweight, chosen1=x.chosen, chosen2=y.chosen)
             }
+
+            ocounter <- ocounter + 1L
         }
     }
 
@@ -217,7 +220,7 @@ NULL
         combined <- combined[order(combined$feature1, combined$p.value),,drop=FALSE]
         fragged <- splitAsList(combined, combined$feature1)
         fragged <- heads(fragged, number)
-        final <- unlist(fragged)
+        final <- unlist(fragged, use.names=FALSE)
         final <- .fill_names(final, use.names, rownames(x), rownames(y))
         final$FDR <- p.adjust(final$p.value, method="BH", n=total.ntests)
         output[[dir]] <- final

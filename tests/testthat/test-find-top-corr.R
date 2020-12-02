@@ -164,7 +164,6 @@ test_that("findTopCorrelations works with blocked self-correlations", {
 
 set.seed(109109103)
 test_that("findTopCorrelations works with blocked cross-correlations", {
-    library(scuttle)
     sce1 <- mockSCE(ngenes=100)
     sce1 <- logNormCounts(sce1)
 
@@ -205,19 +204,56 @@ test_that("findTopCorrelations works with blocked cross-correlations", {
     expect_false(isTRUE(all.equal(weight, noweight)))
 })
 
-set.seed(10004)
-test_that("computeCorrelations handles the looping correctly", {
-    sce1 <- mockSCE(ngenes=20)
-    sce1 <- logNormCounts(sce1)
-    sce2 <- mockSCE(ngenes=25)
-    sce2 <- logNormCounts(sce1)
+set.seed(109109104)
+test_that("findTopCorrelations works with unblocked zero-variance genes", {
+    sce1 <- mockSCE(ngenes=100)
+    vals1 <- counts(sce1)
+    vals1[1:10,] <- 0:9
 
-    ref1 <- computeCorrelations(sce1)
-    ref2 <- computeCorrelations(sce1, sce2)
+    ref <- findTopCorrelations(vals1, number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    out <- findTopCorrelations(vals1[-(1:10),], number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    expect_identical(ref, out)
 
-    out1 <- computeCorrelations(sce1, BPPARAM=safeBPParam(2))
-    out2 <- computeCorrelations(sce1, sce2, BPPARAM=safeBPParam(2))
+    sce2 <- mockSCE(ngenes=100)
+    vals2 <- counts(sce2)
+    vals2[1:10,] <- 0:9
 
-    expect_identical(out1, ref1)
-    expect_identical(out2, ref2)
+    ref <- findTopCorrelations(vals1, y=vals2, number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    out <- findTopCorrelations(vals1[-(1:10),], y=vals2[-(1:10),], number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    expect_identical(ref, out)
+})
+
+set.seed(109109105)
+test_that("findTopCorrelations (self) works with blocked zero-variance genes", {
+    library(scuttle)
+    sce1 <- mockSCE(ngenes=100)
+    vals1 <- counts(sce1)
+
+    block <- sample(2, ncol(sce1), replace=TRUE)
+    vals1[1:5,block==1] <- 0
+    vals1[6:10,block==2] <- 0
+
+    out <- suppressWarnings(findTopCorrelations(vals1[1:10,], number=20, d=10, block=block, BSPARAM=BiocSingular::ExactParam()))
+    ref1 <- suppressWarnings(findTopCorrelations(vals1[1:5,block!=1], number=20, d=10, BSPARAM=BiocSingular::ExactParam()))
+    ref2 <- suppressWarnings(findTopCorrelations(vals1[6:10,block!=2], number=20, d=10, BSPARAM=BiocSingular::ExactParam()))
+    expect_identical(out$positive[,1:4], rbind(ref1$positive[,1:4], ref2$positive[,1:4]))
+    expect_identical(out$negative[,1:4], rbind(ref1$negative[,1:4], ref2$negative[,1:4]))
+
+    others <- 11:nrow(vals1)
+    refo <- findTopCorrelations(vals1[others,], number=20, d=10, block=block, BSPARAM=BiocSingular::ExactParam())
+    ref1o <- findTopCorrelations(vals1[1:5,block!=1], y=vals1[others,block!=1], number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    refo1 <- suppressWarnings(findTopCorrelations(vals1[others,block!=1], y=vals1[1:5,block!=1], number=20, d=10, BSPARAM=BiocSingular::ExactParam()))
+    ref2o <- findTopCorrelations(vals1[6:10,block!=2], y=vals1[others,block!=2], number=20, d=10, BSPARAM=BiocSingular::ExactParam())
+    refo2 <- suppressWarnings(findTopCorrelations(vals1[others,block!=2], y=vals1[6:10,block!=2], number=20, d=10, BSPARAM=BiocSingular::ExactParam()))
+
+    refp <- rbind(ref1$positive, ref2$positive, refo$positive, ref1o$positive, refo1$positive, ref2o$positive, refo2$positive)
+    refp <- refp[order(refp$feature1, refp$p.value),]
+    refp <- unlist(heads(split(refp, refp$feature1), 20), use.names=FALSE)
+    refn <- rbind(ref1$negative, ref2$negative, refo$negative, ref1o$negative, refo1$negative, ref2o$negative, refo2$negative)
+    refn <- refn[order(refn$feature1, refn$p.value),]
+    refn <- unlist(heads(split(refn, refn$feature1), 20), use.names=FALSE)
+
+    out <- suppressWarnings(findTopCorrelations(vals1, number=20, d=10, block=block, BSPARAM=BiocSingular::ExactParam()))
+    expect_identical(out$positive[,1:4], refp[,1:4])
+    expect_identical(out$negative[,1:4], refn[,1:4])
 })
