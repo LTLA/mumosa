@@ -59,6 +59,7 @@ sce <- runPCA(sce, ncomponents=25, subset_row=getTopHVGs(dec, n=5000))
 And again on the protein component.
 
 ```{r}
+# TODO: sync this with the book.
 sceA <- altExp(sce)
 statsA <- perCellQCMetrics(sceA)
 keep <- statsA$detected > 50 
@@ -109,6 +110,41 @@ plotTSNE(sce2, colour_by="combined.clustering")
 Advanced users can also adjust the weight given to each modality via the `weights=` argument;
 a modality assigned a weight of 2 will mean that the rescaled distance is twice that of a modality with a weight of 1.
 
+# Intersecting clusters
+
+In other situations, we may already have a clustering for each modality.
+For example, we might have one clustering for each of the gene expression and ADT PCs:
+
+```{r}
+g.rna <- buildSNNGraph(sce2, use.dimred="PCA")
+rna.clusters <- igraph::cluster_walktrap(g.rna)$membership
+table(rna.clusters)
+
+g.adt <- buildSNNGraph(altExp(sce2), use.dimred='PCA')
+adt.clusters <- igraph::cluster_walktrap(g.adt)$membership
+table(adt.clusters)
+```
+
+We can naively "intersect" these clusters by concatenating their identities, as shown below.
+Cells are only assigned to the same intersected clusters if they belong to the same per-modality clusters.
+In practice, this often creates a large number of irrelevant clusters with small numbers of cells.
+
+```{r}
+intersected <- paste0(adt.clusters, ".", rna.clusters)
+table(intersected)
+```
+
+A more refined approach is implemented in the `intersectClusters()` function.
+This performs the intersection as described but then performs a series of pairwise merges to eliminate the small clusters.
+It will stop merging when the within-cluster sum of squares exceeds that of the original clustering in any modality;
+this ensures that any within-modality structure captured by the original clustering is preserved.
+
+```{r}
+intersected2 <- intersectClusters(list(rna.clusters, adt.clusters),
+    list(reducedDim(sce2), reducedDim(altExp(sce2))))
+table(intersected2)
+```
+
 # Multi-metric UMAP 
 
 Another approach is to take advantage of UMAP's ability to combine information on different scales.
@@ -145,29 +181,17 @@ plotReducedDim(sce2, "MultiUMAP", colour_by="umap.clustering")
 
 Inspired by the UMAP approach, we can perform intersections on arbitrary graphs with the `intersectGraphs()` function.
 This is relevant in cases where we have nearest-neighbor graphs constructed separately for each modality, e.g., for graph-based clustering.
-For example, we might have one constructed using the PCA derived from the gene expression matrices:
-
-```{r}
-g.rna <- buildSNNGraph(sce2, use.dimred="PCA")
-rna.clusters <- igraph::cluster_walktrap(g.rna)$membership
-table(rna.clusters)
-```
-
-And similarly, we might have another for the ADT data:
-
-```{r}
-g.adt <- buildSNNGraph(altExp(sce2), use.dimred='PCA')
-adt.clusters <- igraph::cluster_walktrap(g.adt)$membership
-table(adt.clusters)
-```
-
 We intersect these graphs by setting the weights of edges to the product of the edge weights from each individual graph.
+
+```{r}
+g.com <- intersectGraphs(g.rna, g.adt)
+```
+
 Two cells will only be connected by a high-weighted edge if that edge is of high weight in each original graph,
 i.e., cells must be nearest neighbors in all modalities to be considered as nearest neighbors in the intersection.
 We can then use this graph for clustering, which hopefully gives us clusters where cells are similar across all modalities.
 
 ```{r}
-g.com <- intersectGraphs(g.rna, g.adt)
 com.clusters <- igraph::cluster_walktrap(g.com)$membership
 table(com.clusters)
 ```
