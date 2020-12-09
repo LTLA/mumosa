@@ -1,5 +1,34 @@
 #' Intersect pre-defined clusters
 #'
+#' Intersect pre-defined clusters from multiple modalities, 
+#' pruning out combinations that are poorly separated based on the within-cluster sum of squares (WCSS).
+#'
+#' @param clusters A list of factors or vectors of the same length.
+#' Each element corresponds to one modality and contains the cluster assignments for the same set of cells.
+#' @param coords A list of matrices of length equal to \code{clusters}.
+#' Each element should have number of rows equal to the number of cells (e.g., a matrix of PC coordinates);
+#' we generally expect this to have been used to generate the corresponding entry of \code{clusters}.
+#' @param scale Numeric scalar specifying the scaling factor to apply to the limit on the WCSS for each modality.
+#' @param BPPARAM A \linkS4class{BiocParallelParam} object specifying how parallelization should be performed.
+#'
+#' @details
+#' We intersect clusters by only considering two cells to be in the same \dQuote{output} cluster if they are also clustered together in each modality.
+#' In other words, all cells with a particular combination of identities in \code{clusters} are assigned to a separate output cluster.
+#'
+#' The simplest implementation of the above idea suffers from noise in the cluster definitions that introduces combinations with very few cells.
+#' We eliminate these by greedily merging pairs of combinations, starting with the pairs that minimize the gain in the WCSS.
+#' In this process, we only consider pairs of combinations that share at least cluster across all modalities (to avoid merges across unrelated clusters).
+#'
+#' A natural stopping point for this merging process is when the WCSS of the output clustering exceeds the WCSS of the original clustering for any modality.
+#' This aims to preserve the original clustering in each modality by preventing overly aggressive merges that would greatly increase the WCSS,
+#' while reducing the complexity of the output clustering by ensuring that the variance explained is comparable.
+#'
+#' Users can increase the aggressiveness of the merging procedure by increasing \code{scale}, e.g., to 1.05 or 1.
+#' This will scale up the limit on the WCSS, allowing more merges to be performed before termination.
+#'
+#' @return An integer vector of length equal to the number of cells, containing the assignments to the output clusters.
+#' @author Aaron Lun
+#'
 #' @examples
 #' mat1 <- matrix(rnorm(10000), ncol=20)
 #' chosen <- 1:250
@@ -22,7 +51,18 @@
 #' @export
 #' @importFrom Matrix sparseMatrix
 #' @importFrom S4Vectors DataFrame selfmatch
-intersectClusters <- function(clusters, coords, scale=1) {
+#' @importFrom DelayedArray getAutoBPPARAM setAutoBPPARAM
+#' @importFrom scuttle .bpNotSharedOrUp
+#' @importFrom BiocParallel bpstart bpstop SerialParam
+intersectClusters <- function(clusters, coords, scale=1, BPPARAM=SerialParam()) {
+    old <- getAutoBPPARAM()
+    setAutoBPPARAM(BPPARAM)
+    on.exit(setAutoBPPARAM(old), add=TRUE)
+    if (!.bpNotSharedOrUp(BPPARAM)) {
+        bpstart(BPPARAM)
+        on.exit(bpstop(BPPARAM))
+    }
+
     if (is.null(names(clusters))) {
         names(clusters) <- sprintf("mode%i", seq_along(clusters))
     }
@@ -83,7 +123,6 @@ intersectClusters <- function(clusters, coords, scale=1) {
         if (!found) {
             break
         }
-        print(running)
 
         cur.index <- indices[chosen,]
         new.cluster <- paste0(cur.index[,1], ",", cur.index[,2])
@@ -95,7 +134,6 @@ intersectClusters <- function(clusters, coords, scale=1) {
         has.one <- indices[,1] %in% self | indices[,2] %in% self
         allowed.friends <- unlist(indices[has.one,], use.names=FALSE)
         allowed.friends <- setdiff(unique(allowed.friends), self)
-        print(allowed.friends)
 
         # Wiping out the entries for the merged clusters. 
         indices <- indices[!has.one,]
