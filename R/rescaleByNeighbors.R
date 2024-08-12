@@ -25,7 +25,8 @@
 #' For the SummarizedExperiment and SingleCellExperiment methods, further arguments to pass to the ANY method.
 #' @param k An integer scalar specifying the number of neighbors to use for the distance calculation.
 #' @param BNPARAM A \linkS4class{BiocNeighborParam} object specifying the algorithm to use for the nearest-neighbor search.
-#' @param BPPARAM A \linkS4class{BiocParallelParam} object specifying the parallelization for the nearest-neighbor search.
+#' @param num.threads Integer scalar specifying the number of threads to use for the neighbor search.
+#' @param BPPARAM Deprecated, use \code{num.threads} instead.
 #' 
 #' @return A numeric matrix with number of rows equal to the number of cells,
 #' where the columns span all variables across all modes supplied in \code{x}.
@@ -80,12 +81,12 @@
 NULL
 
 #' @importFrom stats median
-#' @importFrom BiocNeighbors KmknnParam findKNN
+#' @importFrom BiocNeighbors findDistance
 #' @importFrom BiocParallel SerialParam
 #' @importFrom scuttle .bpNotSharedOrUp
 #' @importFrom BiocParallel bpstart bpstop
 #' @importFrom DelayedArray DelayedArray
-.rescale_modal_matrices <- function(x, k=50, weights=NULL, combine=TRUE, BNPARAM=KmknnParam(), BPPARAM=SerialParam()) {
+.rescale_modal_matrices <- function(x, k=50, weights=NULL, combine=TRUE, num.threads=1, BNPARAM=NULL, BPPARAM=NULL) {
     if (length(x)==0) {
         stop("'x' must contain one or more matrices")
     }
@@ -101,7 +102,7 @@ NULL
     weights <- rep(weights, length.out=length(x))
 
     for (i in seq_along(x)) {
-        nn <- findKNN(x[[i]], k=k, BNPARAM=BNPARAM, BPPARAM=BPPARAM, get.index=FALSE, warn.ties=FALSE, last=1)$distance
+        nn <- findDistance(as.matrix(x[[i]]), k=k, BNPARAM=BNPARAM, BPPARAM=BPPARAM, num.threads=num.threads)
         nn <- median(nn)/weights[i]
         x[[i]] <- x[[i]]/max(nn, 1e-8)
     }

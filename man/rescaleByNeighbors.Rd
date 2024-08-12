@@ -14,8 +14,9 @@ rescaleByNeighbors(x, ...)
   k = 50,
   weights = NULL,
   combine = TRUE,
-  BNPARAM = KmknnParam(),
-  BPPARAM = SerialParam()
+  num.threads = 1,
+  BNPARAM = NULL,
+  BPPARAM = NULL
 )
 
 \S4method{rescaleByNeighbors}{SummarizedExperiment}(x, assays, extras = list(), ...)
@@ -51,9 +52,11 @@ See details for how to interpret this argument when \code{x} is a SummarizedExpe
 
 \item{combine}{A logical scalar specifying whether the rescaled matrices should be combined into a single matrix.}
 
+\item{num.threads}{Integer scalar specifying the number of threads to use for the neighbor search.}
+
 \item{BNPARAM}{A \linkS4class{BiocNeighborParam} object specifying the algorithm to use for the nearest-neighbor search.}
 
-\item{BPPARAM}{A \linkS4class{BiocParallelParam} object specifying the parallelization for the nearest-neighbor search.}
+\item{BPPARAM}{Deprecated, use \code{num.threads} instead.}
 
 \item{assays}{A character or integer vector of assays to extract and transpose for use in the ANY method.
 For the SingleCellExperiment, this argument can be missing, in which case no assays are used.}

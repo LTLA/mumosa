@@ -15,8 +15,8 @@ test_that("rescaleByNeighbors works as expected", {
     expect_identical(ncol(combined), nrow(adt_sce) + ncol(reducedDim(exprs_sce)))
 
     combined <- rescaleByNeighbors(exprs_sce, dimreds="PCA", altexps="ADT", combine=FALSE)
-    expect_equal(1, median(BiocNeighbors::findKNN(combined[[1]], k=50, get.index=FALSE, last=1)$distance))
-    expect_equal(1, median(BiocNeighbors::findKNN(combined[[2]], k=50, get.index=FALSE, last=1)$distance))
+    expect_equal(1, median(BiocNeighbors::findKNN(combined[[1]], k=50, get.index=FALSE)$distance[,50]))
+    expect_equal(1, median(BiocNeighbors::findKNN(combined[[2]], k=50, get.index=FALSE)$distance[,50]))
 
     combined2 <- rescaleByNeighbors(exprs_sce, dimreds="PCA", altexps="ADT", combine=FALSE)
     expect_true(sd(combined2[[1]]/reducedDim(exprs_sce)) < 1e-8)
