@@ -28,3 +28,23 @@ test_that("multi-modal UMAP works as expected", {
     output2 <- runMultiUMAP(sce, assays=1, dimreds=1, altexps=1, altexp.assay=1, n_components=10)
     expect_identical(output, reducedDim(output2, "MultiUMAP"))
 })
+
+test_that("multi-modal UMAP works with mixed DelayedArrays and matrices", {
+    set.seed(9999)
+    output1 <- calculateMultiUMAP(things)
+
+    set.seed(9999)
+    output2 <- calculateMultiUMAP(lapply(things, DelayedArray::DelayedArray))
+    expect_identical(output1, output2)
+
+    # Same result for SCEs.
+    sce <- SingleCellExperiment(list(X=DelayedArray::DelayedArray(t(stuff))),
+                                reducedDims=list(Y=stuff[,1:5]), altExps=list(Z=SummarizedExperiment(t(stuff[,1:20]))))
+
+    set.seed(9999)
+    output3 <- calculateMultiUMAP(things, n_components=10)
+
+    set.seed(9999)
+    output4 <- runMultiUMAP(sce, assays=1, dimreds=1, altexps=1, altexp.assay=1, n_components=10)
+    expect_identical(output3, reducedDim(output4, "MultiUMAP"))
+})

@@ -88,11 +88,18 @@ setGeneric("calculateMultiUMAP", function(x, ...) standardGeneric("calculateMult
 #' @rdname runMultiUMAP
 #' @importFrom utils head
 #' @importFrom uwot umap
+#' @importFrom DelayedArray DelayedArray
 setMethod("calculateMultiUMAP", "ANY", function(x, ..., metric="euclidean") {
     if (length(x)==0) {
         stop("'x' must contain one or more matrices")
     }
     mult.metrics <- .compute_multi_modal_metrics(x, metric=metric)
+
+    # Work around Bioconductor/DelayedArray#100 for the time being.
+    if (any(vapply(x, is, class="DelayedArray", TRUE))) {
+        x <- lapply(x, DelayedArray)
+    }
+
     combined <- as.matrix(do.call(cbind, x))
     umap(combined, metric=mult.metrics, ...)
 })
