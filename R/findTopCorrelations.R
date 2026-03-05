@@ -193,10 +193,9 @@ NULL
 
             if (!is.null(output$positive)) {
                 if (same) {
-                    nn.out <- findKNN(BNINDEX=precomputed, k=number, BPPARAM=BPPARAM, get.distance=FALSE)
+                    nn.out <- findKNN(precomputed, k=number, BPPARAM=BPPARAM, get.distance=FALSE)
                 } else {
-                    nn.out <- queryKNN(query=search.out[in.first,,drop=FALSE], k=number, 
-                        get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
+                    nn.out <- queryKNN(precomputed, query=search.out[in.first,,drop=FALSE], k=number, get.distance=FALSE, BPPARAM=BPPARAM)
                 }
 
                 rho <- rowBlockApply(rank.out[in.first,,drop=FALSE], FUN=.compute_exact_neighbor_rho, grid=TRUE,
@@ -206,8 +205,7 @@ NULL
             }
 
             if (!is.null(output$negative)) {
-                nn.out <- queryKNN(query=search.out[in.first.neg,,drop=FALSE], k=number + as.integer(same), 
-                    get.distance=FALSE, BNINDEX=precomputed, BPPARAM=BPPARAM)
+                nn.out <- queryKNN(precomputed, query=search.out[in.first.neg,,drop=FALSE], k=number + as.integer(same), get.distance=FALSE, BPPARAM=BPPARAM)
 
                 # Searching for number + 1 and then stripping out any self-matches.
                 if (same) {
